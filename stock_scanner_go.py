@@ -20,7 +20,7 @@ KDJ_K_MAX = 30               # 确保K值在底部磨底
 MIN_PROFIT_POTENTIAL = 15    # 要求反弹空间至少15%
 
 # --- 形态与趋势控制 ---
-MAX_TODAY_CHANGE = 1.5       # 拒绝大阳线拉升后的追高，只选低位横盘或微涨 1.5
+MAX_TODAY_CHANGE = 3.5       # 拒绝大阳线拉升后的追高，只选低位横盘或微涨 1.5
 # =====================================================================
 
 SHANGHAI_TZ = pytz.timezone('Asia/Shanghai')
