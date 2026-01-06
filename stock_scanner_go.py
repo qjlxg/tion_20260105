@@ -15,12 +15,12 @@ MIN_VOLUME_RATIO = 0.2
 MAX_VOLUME_RATIO = 0.85      # 严格限制在0.85以下，只做缩量洗盘
 
 # --- 极度超跌：锁定V型反转高发区 ---
-RSI6_MAX = 25              # 锁定极致超跌区25 
+RSI6_MAX = 30              # 锁定极致超跌区25 
 KDJ_K_MAX = 30               # 确保K值在底部磨底
 MIN_PROFIT_POTENTIAL = 15    # 要求反弹空间至少15%
 
 # --- 形态与趋势控制 ---
-MAX_TODAY_CHANGE = 3.5       # 拒绝大阳线拉升后的追高，只选低位横盘或微涨 1.5
+MAX_TODAY_CHANGE = 1.5       # 拒绝大阳线拉升后的追高，只选低位横盘或微涨 1.5
 # =====================================================================
 
 SHANGHAI_TZ = pytz.timezone('Asia/Shanghai')
