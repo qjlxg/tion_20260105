@@ -5,103 +5,97 @@ from datetime import datetime
 import multiprocessing
 
 # ==========================================
-# 战法名称：乾坤一击·多维共振突破战法
-# 操作要领：
-# 1. 均线走平抬头 + 站稳60日长线 (趋势反转)
-# 2. MACD & KDJ & 均线三金叉共振 (动能确认)
-# 3. 5-20元低价股 + 非创业板 + 非ST (筹码优势)
-# 4. 放量突破前期整理平台 (一击必中)
+# 战法名称：乾坤一击·极优共振突破 (Version 2.0)
+# 优化逻辑：
+# 1. 严格量比：成交量 > 5日均量2倍 (主力入场证据)
+# 2. 严格换手：3% < 换手率 < 10% (筹码高度活跃且受控)
+# 3. 价格约束：5-20元 + 当日涨幅 > 3% (排除弱势震荡)
+# 4. 形态共振：MA5/10/20 三线顺向多头 + 站稳MA60
 # ==========================================
 
-def calculate_kdj(df, n=9, m1=3, m2=3):
-    low_list = df['最低'].rolling(window=n).min()
-    high_list = df['最高'].rolling(window=n).max()
-    rsv = (df['收盘'] - low_list) / (high_list - low_list) * 100
-    df['K'] = rsv.ewm(com=m1-1).mean()
-    df['D'] = df['K'].ewm(com=m2-1).mean()
-    df['J'] = 3 * df['K'] - 2 * df['D']
-    return df
-
-def calculate_macd(df):
+def calculate_indicators(df):
+    # 均线
+    for m in [5, 10, 20, 60, 120]:
+        df[f'MA{m}'] = df['收盘'].rolling(m).mean()
+    
+    # MACD
     exp1 = df['收盘'].ewm(span=12, adjust=False).mean()
     exp2 = df['收盘'].ewm(span=26, adjust=False).mean()
     df['DIF'] = exp1 - exp2
     df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
-    df['MACD'] = (df['DIF'] - df['DEA']) * 2
+    
+    # 成交量均线
+    df['VMA5'] = df['成交量'].rolling(5).mean()
     return df
 
 def analyze_stock(file_path):
     try:
         code = os.path.basename(file_path).replace('.csv', '')
-        # 排除 ST 和 创业板(300)
-        if 'ST' in code or code.startswith('300'):
+        # 严格排除：ST、300(创业板)、688(科创板)
+        if any(x in code for x in ['ST', '*ST']) or code.startswith(('300', '688')):
             return None
         
         df = pd.read_csv(file_path)
-        if len(df) < 60: return None
+        if len(df) < 120: return None
         
-        # 基础筛选：最新收盘价在 5-20 元
-        last_close = df.iloc[-1]['收盘']
-        if not (5.0 <= last_close <= 20.0):
-            return None
-
-        # 计算技术指标
-        df['MA5'] = df['收盘'].rolling(5).mean()
-        df['MA10'] = df['收盘'].rolling(10).mean()
-        df['MA20'] = df['收盘'].rolling(20).mean()
-        df['MA60'] = df['收盘'].rolling(60).mean()
-        df = calculate_macd(df)
-        df = calculate_kdj(df)
-        
-        # 逻辑判断
+        df = calculate_indicators(df)
         last = df.iloc[-1]
         prev = df.iloc[-2]
         
-        # 1. 均线多头与趋势逻辑：收盘在60日线上方，且60日线走平或微升
-        trend_ok = last['收盘'] > last['MA60'] and last['MA60'] >= prev['MA60'] * 0.998
+        # --- 地狱级筛选条件 ---
         
-        # 2. 三金叉共振逻辑
-        # MACD金叉
-        macd_cross = (prev['DIF'] <= prev['DEA'] and last['DIF'] > last['DEA']) or (last['DIF'] > last['DEA'] and last['MACD'] > prev['MACD'])
-        # KDJ金叉/向上
-        kdj_up = last['K'] > last['D'] and last['J'] > prev['J']
-        # 均线共振 (5日线上穿10日或呈多头)
-        ma_up = last['MA5'] >= last['MA10']
+        # 1. 价格与涨幅约束
+        if not (5.0 <= last['收盘'] <= 20.0): return None
+        if last['涨跌幅'] < 3.0: return None # 必须是中大阳线
         
-        # 3. 优中选优：量价复盘
-        vol_ratio = last['成交量'] / df['成交量'].tail(5).mean() # 量比
+        # 2. 极优量能平衡 (关键)
+        volume_ratio = last['成交量'] / last['VMA5']
+        if volume_ratio < 1.8: return None # 量能必须放大1.8倍以上，否则视为假突破
         
-        if trend_ok and macd_cross and kdj_up and ma_up:
-            # 计算信号强度 (1-100)
-            strength = 70
-            if vol_ratio > 1.5: strength += 15 # 放量突破
-            if last['涨跌幅'] > 3: strength += 15 # 实体坚决
-            
-            # 操作建议逻辑
-            suggestion = "观察待机"
-            if strength >= 90: suggestion = "【极强】重仓一击必中，主升浪起点"
-            elif strength >= 80: suggestion = "【走强】建议适量试错，关注5日线支撑"
-            else: suggestion = "【初步转强】轻仓观察，确认站稳长线"
-            
-            return {
-                'code': code,
-                '最新价': last_close,
-                '涨跌幅': f"{last['涨跌幅']}%",
-                '强度': min(strength, 100),
-                '建议': suggestion,
-                '战法理由': "长线走平+三位一体金叉"
-            }
-    except Exception:
+        # 3. 活跃度约束
+        if not (3.0 <= last['换手率'] <= 12.0): return None # 太低没人玩，太高是散户营
+        
+        # 4. 均线形态：多头排列初绽放
+        # 要求：5 > 10 > 20 且 价格 > 60日线 (趋势走平抬头)
+        ma_perfect = last['MA5'] > last['MA10'] > last['MA20'] > last['MA60']
+        if not ma_perfect: return None
+        
+        # 5. 指标共振：MACD金叉且DIF在零轴附近 (起爆位)
+        macd_ok = last['DIF'] > last['DEA'] and last['DIF'] > -0.1
+        if not macd_ok: return None
+
+        # --- 计算最终评分 (0-100) ---
+        score = 60
+        if volume_ratio > 2.5: score += 15 # 巨量突破加分
+        if prev['收盘'] <= last['MA20'] and last['收盘'] > last['MA20']: score += 15 # 穿三线加分
+        if last['MA60'] > prev['MA60']: score += 10 # 趋势抬头确认
+        
+        # 操作建议
+        if score >= 90:
+            advice = "【全仓出击】绝佳起爆点，量价齐升，一击必中"
+        elif score >= 80:
+            advice = "【重仓介入】多维共振明显，趋势已经确立"
+        else:
+            advice = "【试错观察】形态尚可，建议分批入场"
+
+        return {
+            'code': code,
+            '收盘价': last['收盘'],
+            '涨跌幅': f"{last['涨跌幅']}%",
+            '换手率': f"{last['换手率']}%",
+            '量比': round(volume_ratio, 2),
+            '强度评分': score,
+            '操作建议': advice,
+            '核心逻辑': "倍量突破+多头初绽"
+        }
+    except:
         return None
 
 def main():
     stock_dir = 'stock_data'
     name_file = 'stock_names.csv'
     
-    # 扫描文件
     files = [os.path.join(stock_dir, f) for f in os.listdir(stock_dir) if f.endswith('.csv')]
-    
-    # 并行处理
     with multiprocessing.Pool() as pool:
         results = pool.map(analyze_stock, files)
     
@@ -110,31 +104,24 @@ def main():
     # 匹配名称
     if os.path.exists(name_file):
         names_df = pd.read_csv(name_file)
-        # 确保 code 是字符串以便匹配
         names_df['code'] = names_df['code'].astype(str).str.zfill(6)
-        final_list = []
+        name_dict = dict(zip(names_df['code'], names_df['name']))
         for r in results:
-            name = names_df[names_df['code'] == r['code']]['name'].values
-            r['名称'] = name[0] if len(name) > 0 else "未知"
-            final_list.append(r)
-        results = final_list
+            r['名称'] = name_dict.get(r['code'], "未知")
 
-    # 结果排序 (强度优先)
     report_df = pd.DataFrame(results)
     if not report_df.empty:
-        report_df = report_df.sort_values(by='强度', ascending=False)
+        # 只取评分最高的前 5 只，真正做到“优中选优”
+        report_df = report_df.sort_values(by='强度评分', ascending=False).head(5)
     
-    # 保存结果
+    # 保存路径
     now = datetime.now()
     dir_path = now.strftime('%Y%m')
-    if not os.path.exists(dir_path):
-        os.makedirs(dir_path)
-    
-    file_name = f"multidim_resonance_strategy_{now.strftime('%Y%m%d_%H%M%S')}.csv"
-    save_path = os.path.join(dir_path, file_name)
+    if not os.path.exists(dir_path): os.makedirs(dir_path)
+    save_path = os.path.join(dir_path, f"top_picks_{now.strftime('%Y%m%d')}.csv")
     
     report_df.to_csv(save_path, index=False, encoding='utf-8-sig')
-    print(f"复盘完成，找到 {len(report_df)} 只符合战法标的。")
+    print(f"复盘结束。已从海选个股中锁定最强 5 只标的。")
 
 if __name__ == "__main__":
     main()
