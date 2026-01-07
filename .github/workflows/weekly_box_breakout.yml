@@ -1,0 +1,39 @@
+name: weekly_box_breakout
+
+on:
+  schedule:
+    # 每天北京时间 17:00 运行 (UTC 9:00)
+    - cron: '7 9 * * *'
+  workflow_dispatch: # 支持手动运行
+  push:
+    paths:
+      - 'weekly_box_breakout.py'
+      - '.github/workflows/weekly_box_breakout.yml'
+
+jobs:
+  run_strategy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          pip install pandas numpy
+
+      - name: Run Weekly Box Strategy
+        run: |
+          python weekly_box_breakout.py
+
+      - name: Commit and Push Results
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git add .
+          # 只有在有新文件生成时才提交
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update: Weekly Box Breakout Results $(date +'%Y-%m-%d')" && git push)
