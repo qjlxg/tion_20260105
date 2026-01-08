@@ -6,8 +6,9 @@ from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor
 
 # ==========================================
-# 战法名称：量价乾坤·一击必中 (Precision Vol-Price Strategy)
-# 战法备注：极致缩圈，只做上升趋势中的温和放量突破点。
+# 战法名称：图片原版-量价密码战法
+# 战法逻辑：基于用户上传的量价关系核心图谱
+# 核心口诀：量增价涨看多，量缩价涨警惕，高位量大不涨必撤
 # ==========================================
 
 DATA_DIR = 'stock_data'
@@ -16,106 +17,105 @@ NAMES_FILE = 'stock_names.csv'
 def analyze_stock(file_path, stock_names):
     try:
         df = pd.read_csv(file_path)
-        if df.empty or len(df) < 30:
+        if df.empty or len(df) < 10:
             return None
         
-        # 1. 严格代码过滤
+        # 提取股票代码
         code = os.path.basename(file_path).replace('.csv', '')
-        if code.startswith(('30', '688', '8', '4')):
+        # 严格排除逻辑：创业板(30)、排除其它非沪深A股
+        if not (code.startswith('60') or code.startswith('00') or code.startswith('60')):
+            return None
+        if code.startswith('30'):
             return None
             
         stock_name = stock_names.get(code, "未知")
-        if any(x in stock_name for x in ["ST", "退", "PT"]):
+        if any(x in stock_name for x in ["ST", "退"]):
             return None
 
-        # --- 静态基础条件 ---
-        last_row = df.iloc[-1]
-        curr_price = last_row['收盘']
+        # 提取最新数据
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+        
+        curr_price = last['收盘']
+        # 严格价格区间
         if not (5.0 <= curr_price <= 20.0):
             return None
 
-        # --- 趋势与空间计算 ---
-        ma20 = df['收盘'].rolling(window=20).mean()
-        ma20_curr = ma20.iloc[-1]
-        ma20_prev = ma20.iloc[-2]
+        # 计算量价变化情况
+        price_up = last['涨跌幅'] > 0
+        vol_up = last['成交量'] > prev['成交量'] * 1.05 # 温和放量定义
+        vol_down = last['成交量'] < prev['成交量'] * 0.95
         
-        # 必须在MA20之上，且MA20正在向上运行
-        if curr_price < ma20_curr or ma20_curr <= ma20_prev:
-            return None
-            
-        # 突破确认：今日收盘价必须是过去5天的最高收盘价
-        if curr_price < df['收盘'].tail(5).max():
-            return None
+        # 计算价格位置（用于判定高低位）
+        high_20 = df['最高'].tail(20).max()
+        low_20 = df['最低'].tail(20).min()
+        is_high_pos = curr_price > (low_20 + (high_20 - low_20) * 0.8)
+        is_low_pos = curr_price < (low_20 + (high_20 - low_20) * 0.3)
 
-        # --- 量比与质量过滤 ---
-        avg_vol_5 = df['成交量'].iloc[-6:-1].mean()
-        curr_vol = last_row['成交量']
-        vol_ratio = curr_vol / avg_vol_5 if avg_vol_5 > 0 else 0
-        turnover = last_row['换手率']
-        amplitude = last_row['振幅']
-        
-        # K线实体比例
-        high, low = last_row['最高'], last_row['最低']
-        entity_ratio = (curr_price - low) / (high - low) if high != low else 0
-
-        # --- 极严筛选逻辑 ---
-        price_change = last_row['涨跌幅']
-        
-        # 核心：量价齐升启动 (条件收窄)
-        # 涨幅限制在 3-6%，量比 1.8-3.5，换手 3-8% (主力洗盘后的标准启动指标)
-        if (3.0 <= price_change <= 6.5) and (1.8 <= vol_ratio <= 3.5) and (3.0 <= turnover <= 8.0):
-            if entity_ratio > 0.85 and amplitude < 9.0:
-                signal = "一击必中：启动点"
-                strength = 98
-                advice = "上升通道温和放量突破，筹码锁定良好，建议重点关注。"
-            else:
-                return None
-        else:
-            return None
-
-        return {
-            '日期': last_row['日期'],
-            '代码': code, # 修复：移除引号
+        res = {
+            '日期': last['日期'],
+            '代码': code, # 修复：直接输出纯净代码
             '名称': stock_name,
             '收盘': curr_price,
-            '涨跌幅%': price_change,
-            '换手率%': turnover,
-            '量比': round(vol_ratio, 2),
-            '战法信号': signal,
-            '信号强度': f"{strength}%",
-            '操作建议': advice
+            '涨跌幅%': last['涨跌幅'],
+            '成交量': last['成交量']
         }
+
+        # --- 匹配图片核心量价口诀 ---
+        
+        # 1. 量增价涨 (理想入场点)
+        if vol_up and last['涨跌幅'] > 1.5:
+            res.update({'战法信号': '量增价涨', '买入信号强度': '90%', '操作建议': '健康拉升：主力推高，理想加仓/持有点。'})
+        
+        # 2. 量缩价涨 (诱多警惕)
+        elif vol_down and last['涨跌幅'] > 1.5:
+            res.update({'战法信号': '量缩价涨', '买入信号强度': '40%', '操作建议': '量价背离：跟风不足，主力诱多，注意见顶风险。'})
+            
+        # 3. 低位量平价升 (洗盘结束)
+        elif is_low_pos and abs(last['成交量']/prev['成交量']-1) < 0.1 and last['涨跌幅'] > 0.5:
+            res.update({'战法信号': '低位量平价升', '买入信号强度': '75%', '操作建议': '洗盘结束：温和拉升信号，可试错观察。'})
+
+        # 4. 高位量增价平 (极其危险)
+        elif is_high_pos and vol_up and abs(last['涨跌幅']) < 0.5:
+            res.update({'战法信号': '高位量增价平', '买入信号强度': '0%', '操作建议': '绝命信号：主力高位对倒出货，坚决撤离。'})
+
+        # 5. 放量下跌
+        elif vol_up and last['涨跌幅'] < -2:
+            res.update({'战法信号': '量增价跌', '买入信号强度': '0%', '操作建议': '恐慌抛售：主力清仓，不可抄底。'})
+            
+        else:
+            return None # 不符合核心6种量价形态的排除，以减少结果数量
+
+        return res
     except:
         return None
 
 def main():
+    # 读取名称
     names_df = pd.read_csv(NAMES_FILE)
-    # 确保代码是6位字符串
     stock_names = dict(zip(names_df['code'].astype(str).str.zfill(6), names_df['name']))
     
+    # 扫描
     csv_files = glob.glob(os.path.join(DATA_DIR, '*.csv'))
     
     with ProcessPoolExecutor() as executor:
         from functools import partial
         func = partial(analyze_stock, stock_names=stock_names)
-        results = list(executor.map(func, csv_files))
+        results = [r for r in list(executor.map(func, csv_files)) if r is not None]
     
-    final_list = [res for res in results if res is not None]
-    
-    if final_list:
-        output_df = pd.DataFrame(final_list)
-        # 再次优选：按量比和实体比例二次排序
-        output_df = output_df.sort_values(by=['信号强度', '量比'], ascending=False).head(5) # 强制限额，只留最精锐的5只
+    if results:
+        output_df = pd.DataFrame(results)
+        # 按照强度降序，只选精锐
+        output_df = output_df.sort_values(by='买入信号强度', ascending=False)
         
+        # 按年月归档
         now = datetime.now()
         dir_name = now.strftime('%Y-%m')
         os.makedirs(dir_name, exist_ok=True)
         
-        file_path = os.path.join(dir_name, f"volume_price_strategy_{now.strftime('%Y%m%d')}.csv")
-        output_df.to_csv(file_path, index=False, encoding='utf-8-sig')
-        print(f"精选复盘完成。")
-    else:
-        print("今日无极高概率信号，空仓休息。")
+        filename = f"volume_price_strategy_{now.strftime('%Y%m%d_%H%M')}.csv"
+        output_df.to_csv(os.path.join(dir_name, filename), index=False, encoding='utf-8-sig')
+        print(f"复盘已完成。")
 
 if __name__ == "__main__":
     main()
