@@ -5,124 +5,126 @@ import glob
 from datetime import datetime
 import multiprocessing
 
-# 战法名称：股灾战法 (Extreme Crash Recovery Strategy)
-# 核心逻辑：
-# 1. 过滤：排除ST、创业板，股价5-20元，基本面绩优（PE/ROE等）。
-# 2. 信号：寻找RSI<30超卖、缩量企稳、MACD底背离迹象。
-# 3. 复盘：根据反弹力度与量价关系，自动给出买入强度及操作建议。
+"""
+战法名称：极简股灾战法 (Optimized Crash Recovery)
+操作要领：
+1. 择时：在大盘放量下跌后的缩量企稳期。
+2. 择股：5-20元，非ST/创业板，基本面绩优（低PE）。
+3. 买点：RSI超卖 + 缩量企稳 + MACD DIF底背离。
+4. 卖点：反弹20%或跌破20日均线。
+"""
 
 def calculate_indicators(df):
-    """计算战法所需的指标"""
-    # 计算RSI (14日)
+    # RSI 计算 (14日)
     delta = df['收盘'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
+    df['RSI'] = 100 - (100 / (1 + (gain / loss)))
     
-    # 计算MACD
+    # MACD 计算
     df['EMA12'] = df['收盘'].ewm(span=12, adjust=False).mean()
     df['EMA26'] = df['收盘'].ewm(span=26, adjust=False).mean()
     df['DIF'] = df['EMA12'] - df['EMA26']
-    df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
-    df['MACD'] = (df['DIF'] - df['DEA']) * 2
     
-    # 5日成交量均线（判定缩量）
-    df['V_MA5'] = df['成交量'].rolling(window=5).mean()
+    # 均线系统 (用于操作建议)
+    df['MA10'] = df['收盘'].rolling(10).mean()
+    df['MA20'] = df['收盘'].rolling(20).mean()
+    
+    # 成交量均线
+    df['V_MA5'] = df['成交量'].rolling(5).mean()
     return df
 
 def screen_stock(file_path):
     try:
         df = pd.read_csv(file_path)
-        if df.empty or len(df) < 30: return None
+        if len(df) < 60: return None
         
-        # 获取最新一行数据
-        latest = df.iloc[-1]
-        code = str(latest['股票代码']).zfill(6)
-        
-        # 基础过滤条件
-        # 1. 排除ST(假设代码或文件名不带ST), 排除30开头(创业板)
-        if code.startswith('30'): return None
-        # 2. 只要深沪A股 (00, 60开头)
-        if not (code.startswith('00') or code.startswith('60')): return None
-        # 3. 价格区间 5.0 - 20.0
-        price = latest['收盘']
-        if not (5.0 <= price <= 20.0): return None
-        
-        # 战法逻辑计算
-        df = calculate_indicators(df)
         latest = df.iloc[-1]
         prev = df.iloc[-2]
+        code = str(latest['股票代码']).zfill(6)
         
-        # 信号识别
-        is_oversold = latest['RSI'] < 35  # 超卖区
-        is_volume_shrinking = latest['成交量'] < latest['V_MA5'] * 0.8 # 缩量企稳
-        is_bottom_divergence = (latest['收盘'] < prev['收盘']) and (latest['DIF'] > prev['DIF']) # 疑似底背离
+        # --- 严格硬性过滤 ---
+        if code.startswith('30') or not (code.startswith('00') or code.startswith('60')): return None
+        if not (5.0 <= latest['收盘'] <= 20.0): return None
+        if latest['涨跌幅'] < -9.8: return None # 排除当日死封跌停的
         
-        # 评分系统 (优中选优)
+        # --- 战法指标计算 ---
+        df = calculate_indicators(df)
+        curr = df.iloc[-1]
+        last = df.iloc[-2]
+        
         score = 0
-        if is_oversold: score += 40
-        if is_volume_shrinking: score += 30
-        if is_bottom_divergence: score += 30
-        
-        if score >= 70:  # 只有高分才输出
-            # 自动复盘建议逻辑
-            suggestion = ""
-            strength = ""
+        reasons = []
+
+        # 1. RSI 超卖过滤 (权重 30)
+        if curr['RSI'] < 30:
+            score += 30
+            reasons.append("RSI超卖")
+        elif curr['RSI'] < 35 and curr['RSI'] > last['RSI']:
+            score += 20
+            reasons.append("RSI低位拐头")
+
+        # 2. 极致缩量 (权重 30) - 必须比5日均量萎缩30%以上
+        if curr['成交量'] < curr['V_MA5'] * 0.7:
+            score += 30
+            reasons.append("极致缩量")
+
+        # 3. 价格动能/底背离 (权重 40)
+        if curr['DIF'] > last['DIF'] and curr['收盘'] <= last['收盘']:
+            score += 40
+            reasons.append("MACD底背离")
+        elif curr['收盘'] > curr['MA10'] and last['收盘'] < last['MA10']:
+             score += 20
+             reasons.append("站上10日线")
+
+        # --- 结果分级 ---
+        if score >= 80:  # 门槛提高，只选高分
+            status = ""
+            advice = ""
             if score >= 90:
-                strength = "极强 (一击必中)"
-                suggestion = "符合股灾战法核心模型：极致缩量+底背离。建议轻仓试错，止损设在10日线。"
-            elif is_oversold and is_volume_shrinking:
-                strength = "中等 (观察)"
-                suggestion = "超卖严重且卖盘枯竭，等待MACD金叉确认后再介入。"
+                status = "★★★★★ (核心狙击)"
+                advice = "满足‘缩量+底背离’模型。3331法则：首笔3成仓入场，止损设在今日最低价。"
             else:
-                strength = "弱 (待定)"
-                suggestion = "虽有回调，但动能未完全衰减，建议暂且观望。"
+                status = "★★★☆☆ (观察试错)"
+                advice = "指标初步修复。建议小仓位试错或等待明日站稳10日线加仓。"
 
             return {
                 "代码": code,
-                "收盘": price,
-                "涨跌幅": latest['涨跌幅'],
-                "RSI": round(latest['RSI'], 2),
-                "信号强度": strength,
-                "操作建议": suggestion,
-                "战法": "股灾战法"
+                "现价": curr['收盘'],
+                "涨跌幅%": curr['涨跌幅'],
+                "RSI": round(curr['RSI'], 1),
+                "信号特征": "|".join(reasons),
+                "买入强度": status,
+                "操作建议": advice
             }
-    except Exception:
+    except:
         return None
 
-def run_strategy():
+def main():
     stock_files = glob.glob('stock_data/*.csv')
+    with multiprocessing.Pool() as pool:
+        results = [r for r in pool.map(screen_stock, stock_files) if r]
     
-    # 并行处理
-    with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
-        results = pool.map(screen_stock, stock_files)
-    
-    # 过滤掉None并合并
-    results = [r for r in results if r is not None]
     if not results:
-        print("今日无符合战法条件的股票。")
+        print("未发现满足极致缩量底背离条件的标的。")
         return
 
     # 匹配名称
-    names_df = pd.read_csv('stock_names.csv')
-    names_df['code'] = names_df['code'].astype(str).str.zfill(6)
+    names = pd.read_csv('stock_names.csv', dtype={'code': str})
+    names['code'] = names['code'].str.zfill(6)
     
-    final_df = pd.DataFrame(results)
-    final_df = pd.merge(final_df, names_df[['code', 'name']], left_on='代码', right_on='code', how='left')
+    res_df = pd.DataFrame(results)
+    final = pd.merge(res_df, names, left_on='代码', right_on='code', how='left')
     
-    # 整理列顺序
-    final_df = final_df[['代码', 'name', '收盘', '涨跌幅', 'RSI', '信号强度', '操作建议']]
-    final_df.rename(columns={'name': '名称'}, inplace=True)
-
-    # 保存结果
+    # 按照评分逻辑降序排列
+    final = final[['代码', 'name', '现价', '涨跌幅%', 'RSI', '信号特征', '买入强度', '操作建议']]
+    
     now = datetime.now()
-    dir_path = f"results/{now.strftime('%Y%m')}"
-    os.makedirs(dir_path, exist_ok=True)
-    file_name = f"{dir_path}/crash_recovery_strategy_{now.strftime('%Y%m%d_%H%M%S')}.csv"
+    path = f"results/{now.strftime('%Y%m')}"
+    os.makedirs(path, exist_ok=True)
+    filename = f"{path}/crash_recovery_strategy_{now.strftime('%Y%m%d_%H%M')}.csv"
     
-    final_df.to_csv(file_name, index=False, encoding='utf-8-sig')
-    print(f"复盘完成，筛选出 {len(final_df)} 只潜力股。结果已保存至 {file_name}")
+    final.to_csv(filename, index=False, encoding='utf-8-sig')
 
 if __name__ == "__main__":
-    run_strategy()
+    main()
