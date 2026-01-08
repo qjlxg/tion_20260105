@@ -1,0 +1,36 @@
+name: dragon_breakout
+
+on:
+  push:
+    paths:
+      - 'dragon_breakout.py'
+      - '.github/workflows/dragon_breakout.yml'
+  schedule:
+    - cron: '42 7 * * *' # 国际标准时间 09:00 = 北京时间 17:00
+  workflow_dispatch: # 支持手动触发
+
+jobs:
+  filter_stocks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: ambassadors/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: pip install pandas numpy
+
+      - name: Run Script
+        run: python dragon_breakout.py
+
+      - name: Commit and Push Results
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add .
+          git commit -m "Auto Update: Screening Results $(date +'%Y-%m-%d %H:%M')" || echo "No changes to commit"
+          git push
