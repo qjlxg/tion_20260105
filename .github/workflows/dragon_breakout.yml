@@ -6,8 +6,8 @@ on:
       - 'dragon_breakout.py'
       - '.github/workflows/dragon_breakout.yml'
   schedule:
-    - cron: '42 7 * * *' # 国际标准时间 09:00 = 北京时间 17:00
-  workflow_dispatch: # 支持手动触发
+    - cron: '42 7 * * *' # 北京时间 17:00 运行
+  workflow_dispatch:
 
 jobs:
   filter_stocks:
@@ -17,9 +17,9 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: ambassadors/setup-python@v4
+        uses: actions/setup-python@v4 # 修正后的官方路径
         with:
-          python-version: '4.0'
+          python-version: '3.9'
 
       - name: Install Dependencies
         run: pip install pandas numpy
