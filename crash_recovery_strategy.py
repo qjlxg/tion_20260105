@@ -6,18 +6,17 @@ from datetime import datetime
 import multiprocessing
 
 """
-战法名称：股灾战法-极致狙击版 (Crash Recovery Ultimate)
-
-1. 核心逻辑：在极端超跌后寻找“止跌+反转”的共振点。
-2. 强制条件：
-   - 价格：5.0 - 20.0 元。
-   - 范围：排除ST、排除创业板(30开头)、仅限深沪A股。
-   - 状态：必须满足 MACD 金叉 (DIF >= DEA) 且当日未大跌。
-   - 指标：RSI < 35 (超卖) 且 成交量低于5日均量 (缩量)。
-3. 止损：10/20日均线动态止损。
+战法名称：股灾战法-极致回测狙击版
+战法逻辑说明：
+1. 择时：RSI < 35 (超卖) 且 成交量 < 5日均量*0.85 (缩量企稳)。
+2. 买点：必须满足 MACD 金叉 (DIF >= DEA) 且 DIF 拐头向上。
+3. 选股：5-20元，排除30开头(创业板)及ST，仅限沪深A股。
+4. 仓位：3331法则（3成短线、3成趋势、3成备用、1成机动）。
+5. 止损：跌破10日线减半，20日线清仓；止盈目标 20%。
 """
 
 def calculate_indicators(df):
+    """计算战法核心技术指标"""
     # RSI (14日)
     delta = df['收盘'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -29,7 +28,6 @@ def calculate_indicators(df):
     df['EMA26'] = df['收盘'].ewm(span=26, adjust=False).mean()
     df['DIF'] = df['EMA12'] - df['EMA26']
     df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
-    df['MACD_HIST'] = (df['DIF'] - df['DEA']) * 2
     
     # 均线与成交量
     df['MA10'] = df['收盘'].rolling(10).mean()
@@ -37,79 +35,87 @@ def calculate_indicators(df):
     df['V_MA5'] = df['成交量'].rolling(5).mean()
     return df
 
-def screen_stock(file_path):
+def backtest_and_screen(file_path):
+    """单只股票的回测与实时筛选"""
     try:
         df = pd.read_csv(file_path)
-        if len(df) < 30: return None
+        if len(df) < 60: return None
         
-        latest = df.iloc[-1]
-        code = str(latest['股票代码']).zfill(6)
-        
-        # 1. 基础硬性过滤
+        code = str(df.iloc[-1]['股票代码']).zfill(6)
+        # 严格过滤：非30开头(创业板)，仅限00和60
         if code.startswith('30') or not (code.startswith('00') or code.startswith('60')): return None
-        if not (5.0 <= latest['收盘'] <= 20.0): return None
-        if latest['涨跌幅'] < -3.0: return None  # 过滤仍在大幅杀跌的股票
         
-        # 2. 计算指标
         df = calculate_indicators(df)
-        curr = df.iloc[-1]
-        prev = df.iloc[-2]
         
-        # 3. 严格战法逻辑过滤
-        # 条件A: MACD金叉 (今日金叉或已在金叉状态且红柱增长)
-        is_macd_gold = curr['DIF'] >= curr['DEA']
+        # --- 历史回测逻辑 ---
+        # 寻找历史上符合条件的买入点：RSI<35 & 缩量 & MACD金叉
+        buy_signals = (df['RSI'] < 35) & \
+                      (df['成交量'] < df['V_MA5'] * 0.85) & \
+                      (df['DIF'] >= df['DEA']) & \
+                      (df['DIF'] > df['DIF'].shift(1))
         
-        # 条件B: RSI处于相对超卖低位
-        is_rsi_low = curr['RSI'] < 35
+        history_profit = 0
+        win_rate = 0
+        signal_count = buy_signals.sum()
         
-        # 条件C: 极致缩量 (今日成交量 < 5日均量的85%)
-        is_vol_shrink = curr['成交量'] < curr['V_MA5'] * 0.85
-        
-        # 必须同时满足上述三个核心条件
-        if is_macd_gold and is_rsi_low and is_vol_shrink:
-            # 计算信号强度
-            score = 0
-            if curr['DIF'] > prev['DIF']: score += 40 # DIF拐头
-            if curr['RSI'] < 30: score += 30          # 极度超卖
-            if curr['收盘'] > curr['MA10']: score += 30 # 站上10日线
-            
-            status = "★★★★★ (一击必中)" if score >= 70 else "★★★★☆ (优选入场)"
-            
-            # 自动化复盘操作建议
-            if curr['收盘'] > curr['MA20']:
-                advice = "已站稳20日线，趋势反转确认，建议重仓加仓，目标反弹20%。"
-            else:
-                advice = "MACD金叉确认，符合股灾自救战法。建议按3331法则建立首笔底仓，止损设在10日线。"
+        if signal_count > 0:
+            profits = []
+            for idx in df.index[buy_signals]:
+                if idx + 10 < len(df): # 模拟持有10个交易日
+                    profit = (df.loc[idx+10, '收盘'] - df.loc[idx, '收盘']) / df.loc[idx, '收盘']
+                    profits.append(profit)
+            if profits:
+                history_profit = np.mean(profits)
+                win_rate = len([p for p in profits if p > 0]) / len(profits)
 
+        # --- 实时筛选逻辑 (最新交易日) ---
+        latest = df.iloc[-1]
+        if not (5.0 <= latest['收盘'] <= 20.0): return None
+        
+        # 必须满足买入信号且当日未大跌
+        if buy_signals.iloc[-1] and latest['涨跌幅'] >= -3.0:
+            score = 70
+            if latest['收盘'] > latest['MA10']: score += 15
+            if latest['RSI'] < 30: score += 15
+            
+            status = "★★★★★ (一击必中)" if score >= 85 else "★★★★☆ (优选试错)"
+            
             return {
                 "代码": code,
-                "现价": curr['收盘'],
-                "涨跌幅%": curr['涨跌幅'],
-                "RSI": round(curr['RSI'], 2),
+                "现价": latest['收盘'],
+                "涨跌幅%": latest['涨跌幅'],
+                "RSI": round(latest['RSI'], 2),
+                "历史胜率%": round(win_rate * 100, 2),
+                "历史平均收益%": round(history_profit * 100, 2),
                 "信号强度": status,
-                "操作建议": advice
+                "操作建议": "满足‘缩量+MACD金叉’狙击点。3331法则分批入场，止损设在MA20。"
             }
-    except:
+    except Exception as e:
         return None
 
 def main():
     stock_files = glob.glob('stock_data/*.csv')
+    print(f"开始并行分析 {len(stock_files)} 只股票...")
+    
+    # 并行计算
     with multiprocessing.Pool() as pool:
-        results = [r for r in pool.map(screen_stock, stock_files) if r]
+        results = [r for r in pool.map(backtest_and_screen, stock_files) if r]
     
     if not results:
-        print("今日无符合'MACD金叉+缩量超卖'严苛条件的标的。")
+        print("今日无符合战法要求的精品标的。")
         return
 
-    # 匹配名称
+    # 加载名称
     names = pd.read_csv('stock_names.csv', dtype={'code': str})
     names['code'] = names['code'].str.zfill(6)
     
     res_df = pd.DataFrame(results)
     final = pd.merge(res_df, names, left_on='代码', right_on='code', how='left')
     
-    # 结果按强度排序
-    final = final[['代码', 'name', '现价', '涨跌幅%', 'RSI', '信号强度', '操作建议']]
+    # 按照历史胜率和信号强度排序，确保排在前面的是最稳的
+    final = final.sort_values(by=['历史胜率%', '现价'], ascending=[False, True])
+    
+    final = final[['代码', 'name', '现价', '涨跌幅%', 'RSI', '历史胜率%', '历史平均收益%', '信号强度', '操作建议']]
     final.rename(columns={'name': '名称'}, inplace=True)
     
     # 保存结果
@@ -119,7 +125,7 @@ def main():
     filename = f"{path}/crash_recovery_strategy_{now.strftime('%Y%m%d_%H%M')}.csv"
     
     final.to_csv(filename, index=False, encoding='utf-8-sig')
-    print(f"筛选完成，共发现 {len(final)} 只精品标的。")
+    print(f"分析完成！结果已存至 {filename}")
 
 if __name__ == "__main__":
     main()
