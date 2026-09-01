@@ -1,0 +1,39 @@
+name: volume_price_strategy
+
+on:
+  push:
+    paths:
+      - 'volume_price_strategy.py'
+      - '.github/workflows/volume_price_strategy.yml'
+  schedule:
+    # 每天北京时间 17:00 运行 (UTC 9:00)
+    - cron: '43 7 * * *'
+  workflow_dispatch: # 支持手动运行
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          pip install pandas numpy
+
+      - name: Run Strategy Script
+        run: python volume_price_strategy.py
+
+      - name: Commit and Push Results
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add results/ || true # 确保目录存在
+          git add . # 添加新创建的年月目录和文件
+          git commit -m "Auto: 每日量价复盘结果报告 $(date +'%Y-%m-%d %H:%M')" || echo "No changes to commit"
+          git push
