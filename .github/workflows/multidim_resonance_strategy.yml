@@ -1,0 +1,38 @@
+name: multidim_resonance_strategy
+
+on:
+  schedule:
+    # 每天北京时间 17:00 运行 (UTC 9:00)
+    - cron: '42 9 * * *'
+  push:
+    paths:
+      - 'multidim_resonance_strategy.py'
+      - '.github/workflows/multidim_resonance_strategy.yml'
+  workflow_dispatch: # 支持手动运行
+
+jobs:
+  stock_analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          pip install pandas numpy
+
+      - name: Run Analysis Script
+        run: python multidim_resonance_strategy.py
+
+      - name: Commit and Push Results
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add .
+          git commit -m "自动复盘报告: $(date +'%Y-%m-%d %H:%M:%S')" || exit 0
+          git push
